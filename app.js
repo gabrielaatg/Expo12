@@ -7,6 +7,20 @@ const catalog = [
   {id:2,name:'Teclado',category:'accessories',price:120,icon:'⌨️'},
   {id:3,name:'Parlante',category:'audio',price:60,icon:'🔊'}
 ];
+// Requisitos funcionales de la tienda. Los tres últimos existen en la tienda pero ninguna de las 20 pruebas los verifica.
+const requirements = [
+  {id:'checkout',name:'Finalizar una compra'},
+  {id:'total',name:'Calcular el total del carrito'},
+  {id:'filter',name:'Filtrar por categoría'},
+  {id:'catalog',name:'Mostrar el catálogo completo'},
+  {id:'catalog-data',name:'Datos válidos del catálogo'},
+  {id:'empty-checkout',name:'Rechazar compra con carrito vacío'},
+  {id:'button-style',name:'Estilo del botón de compra'},
+  {id:'add-to-cart',name:'Agregar producto al carrito'},
+  {id:'cart-count',name:'Contador de productos del carrito'},
+  {id:'clear-cart',name:'Vaciar el carrito tras una compra exitosa'}
+];
+const defectNames = {critical:'Compra bloqueada',high:'Precio incorrecto',medium:'Filtro incorrecto',low:'Color incorrecto'};
 let cart = [];
 let tested = false;
 let dynamicPurchaseStats = { attempts: 0, errors: 0, totalDurationMs: 0, successfulAt: [] };
@@ -92,6 +106,37 @@ function updateAutomation(){
  $('automation-fail').textContent=fmt(execution.failRate??0)+' %';$('automation-fail-detail').textContent=`${execution.failed} fallidas de ${execution.total}`;
  $('automation-time').textContent=duration<1?'< 1 ms':fmt(duration)+' ms';
 }
+function updateCoverage(){
+ const rows=evaluate(state());
+ const result=TestCoverage.calculate(requirements,rows);
+ const fmt=value=>new Intl.NumberFormat('es-PE',{maximumFractionDigits:2}).format(value);
+ if(!result.valid||result.rate===null){$('coverage-rate').textContent='—';$('coverage-detail').textContent='No se pudo calcular la cobertura';return;}
+ $('coverage-rate').textContent=fmt(result.rate)+' %';
+ $('coverage-detail').textContent=`${result.covered} de ${result.total} requisitos con al menos una prueba`;
+ $('coverage-fill').style.width=result.rate+'%';$('coverage-track').setAttribute('aria-valuenow',String(result.rate));
+ $('coverage-formula').textContent=`Fórmula: ${result.covered} / ${result.total} × 100 = ${fmt(result.rate)} %. Muchas pruebas sobre un mismo requisito no aumentan la cobertura.`;
+ $('coverage-rows').innerHTML=requirements.map(r=>{const n=result.testsPerRequirement[r.id];return `<tr><td>${r.name}</td><td>${n}</td><td class="${n?'ok':'fail'}">${n?'Cubierto':'Sin pruebas'}</td></tr>`;}).join('');
+}
+function updateDefectRate(){
+ const rows=evaluate(state());
+ const detected=DefectRate.detectDefects(rows);
+ const coverage=TestCoverage.calculate(requirements,rows);
+ const fmt=value=>new Intl.NumberFormat('es-PE',{maximumFractionDigits:2}).format(value);
+ if(!detected.valid){$('defect-rate').textContent='—';return;}
+ const found=detected.defects.length;
+ const rate=DefectRate.calculate(found,rows.length);
+ const dens=DefectRate.density(found,coverage.covered);
+ const failed=rows.filter(r=>!r.pass).length;
+ $('defect-rate').textContent=rate.rate===null?'—':fmt(rate.rate)+' %';
+ $('defect-rate-detail').textContent=`${found} defectos en ${rows.length} pruebas ejecutadas`;
+ $('defect-failed').textContent=failed;
+ $('defect-failed-detail').textContent=`pruebas fallidas causadas por ${found} defecto${found===1?'':'s'}`;
+ $('defect-density').textContent=dens.valid?fmt(dens.value):'—';
+ $('defect-density-detail').textContent=`defectos por requisito cubierto (${found} / ${coverage.covered})`;
+ $('defect-severity').innerHTML=DefectRate.SEVERITIES.map(s=>`<div><span class="severity ${s}">${names[s]}</span><meter min="0" max="${Math.max(found,1)}" value="${detected.bySeverity[s]}"></meter><b>${detected.bySeverity[s]}</b></div>`).join('');
+ $('defect-list').textContent=found?'Detectados: '+detected.defects.map(d=>`${defectNames[d.id]||d.id} (${d.failedTests} prueba${d.failedTests===1?'':'s'})`).join(' · ')+'.':'No se detectaron defectos con la configuración actual.';
+ $('defect-formula').textContent=`Fórmula: ${found} defectos / ${rows.length} pruebas × 100 = ${rate.rate===null?'—':fmt(rate.rate)} %. Se cuentan defectos únicos, no pruebas fallidas.`;
+}
 function message(text,kind=''){ $('shop-message').textContent=text;$('shop-message').className='shop-message '+kind; }
 function renderShop(){
   const bugs=state();
@@ -103,28 +148,29 @@ function renderShop(){
 // Cada prueba compara el comportamiento simulado con un resultado esperado.
 function evaluate(bugs){
  const checks=[
-  ['Finalizar una compra',()=>checkoutResult([catalog[0]],bugs)==='success','critical'],
-  ['Total de un producto: S/ 80',()=>totalFor([catalog[0]],bugs)===80,'high'],
-  ['Total de dos productos: S/ 200',()=>totalFor([catalog[0],catalog[1]],bugs)===200,'high'],
-  ['Filtro Audio excluye accesorios',()=>visibleProducts('audio',bugs).every(p=>p.category==='audio'),'medium'],
-  ['Filtro Audio devuelve 2 productos',()=>visibleProducts('audio',bugs).length===2,'medium'],
-  ['Botón de compra con color verde',()=>buttonColor(bugs)==='#17634e','low'],
-  ['Catálogo con 3 productos',()=>visibleProducts('all',bugs).length===3],
-  ['Filtro Accesorios devuelve el teclado',()=>visibleProducts('accessories',bugs)[0].id===2],
-  ['Filtro Accesorios devuelve 1 producto',()=>visibleProducts('accessories',bugs).length===1],
-  ['Audífonos disponibles en Audio',()=>visibleProducts('audio',bugs).some(p=>p.id===1)],
-  ['Parlante disponible en Audio',()=>visibleProducts('audio',bugs).some(p=>p.id===3)],
-  ['Precio de audífonos: S/ 80',()=>catalog[0].price===80],
-  ['Precio de teclado: S/ 120',()=>catalog[1].price===120],
-  ['Precio de parlante: S/ 60',()=>catalog[2].price===60],
-  ['Identificadores únicos',()=>new Set(catalog.map(p=>p.id)).size===3],
-  ['Productos con nombre',()=>catalog.every(p=>p.name.length>0)],
-  ['Precios mayores que cero',()=>catalog.every(p=>p.price>0)],
-  ['Categorías reconocidas',()=>catalog.every(p=>['audio','accessories'].includes(p.category))],
-  ['Carrito vacío con total cero',()=>totalFor([],bugs)===0],
-  ['Compra vacía rechazada',()=>checkoutResult([],bugs)==='empty']
+  ['Finalizar una compra',()=>checkoutResult([catalog[0]],bugs)==='success','critical','checkout'],
+  ['Total de un producto: S/ 80',()=>totalFor([catalog[0]],bugs)===80,'high','total'],
+  ['Total de dos productos: S/ 200',()=>totalFor([catalog[0],catalog[1]],bugs)===200,'high','total'],
+  ['Filtro Audio excluye accesorios',()=>visibleProducts('audio',bugs).every(p=>p.category==='audio'),'medium','filter'],
+  ['Filtro Audio devuelve 2 productos',()=>visibleProducts('audio',bugs).length===2,'medium','filter'],
+  ['Botón de compra con color verde',()=>buttonColor(bugs)==='#17634e','low','button-style'],
+  ['Catálogo con 3 productos',()=>visibleProducts('all',bugs).length===3,undefined,'catalog'],
+  ['Filtro Accesorios devuelve el teclado',()=>visibleProducts('accessories',bugs)[0].id===2,undefined,'filter'],
+  ['Filtro Accesorios devuelve 1 producto',()=>visibleProducts('accessories',bugs).length===1,undefined,'filter'],
+  ['Audífonos disponibles en Audio',()=>visibleProducts('audio',bugs).some(p=>p.id===1),undefined,'filter'],
+  ['Parlante disponible en Audio',()=>visibleProducts('audio',bugs).some(p=>p.id===3),undefined,'filter'],
+  ['Precio de audífonos: S/ 80',()=>catalog[0].price===80,undefined,'catalog-data'],
+  ['Precio de teclado: S/ 120',()=>catalog[1].price===120,undefined,'catalog-data'],
+  ['Precio de parlante: S/ 60',()=>catalog[2].price===60,undefined,'catalog-data'],
+  ['Identificadores únicos',()=>new Set(catalog.map(p=>p.id)).size===3,undefined,'catalog-data'],
+  ['Productos con nombre',()=>catalog.every(p=>p.name.length>0),undefined,'catalog-data'],
+  ['Precios mayores que cero',()=>catalog.every(p=>p.price>0),undefined,'catalog-data'],
+  ['Categorías reconocidas',()=>catalog.every(p=>['audio','accessories'].includes(p.category)),undefined,'catalog-data'],
+  ['Carrito vacío con total cero',()=>totalFor([],bugs)===0,undefined,'total'],
+  ['Compra vacía rechazada',()=>checkoutResult([],bugs)==='empty',undefined,'empty-checkout']
  ];
- return checks.map(([name,check,severity])=>({name,pass:check(),severity}));
+ // En esta demo cada severidad corresponde a un único defecto activable, por eso se usa como id del defecto.
+ return checks.map(([name,check,severity,requirement])=>({name,pass:check(),severity,defect:severity,covers:[requirement]}));
 }
 function runTests(){
  const bugs=state(), rows=evaluate(bugs), passed=rows.filter(r=>r.pass).length, failed=rows.length-passed;
@@ -139,7 +185,7 @@ function runTests(){
  $('formulas').textContent=`Pass Rate = (${passed} / 20) × 100 = ${passed*5}% · Fail Rate = (${failed} / 20) × 100 = ${failed*5}%`;
  $('test-rows').innerHTML=rows.map(r=>`<tr><td>${r.name}</td><td class="${r.pass?'ok':'fail'}">${r.pass?'Aprobada':'Fallida'}</td><td>${r.pass?'—':names[r.severity]}</td></tr>`).join('');
 }
-function invalidate(){if(tested){$('report').hidden=true;$('test-status').textContent='Cambiaste los defectos. Ejecuta las pruebas otra vez para actualizar los resultados.';tested=false;} renderShop();updateAutomation();message('Configuración actualizada. Prueba la tienda o ejecuta las pruebas.');}
+function invalidate(){if(tested){$('report').hidden=true;$('test-status').textContent='Cambiaste los defectos. Ejecuta las pruebas otra vez para actualizar los resultados.';tested=false;} renderShop();updateAutomation();updateCoverage();updateDefectRate();message('Configuración actualizada. Prueba la tienda o ejecuta las pruebas.');}
 function setPreset(selected){levels.forEach(l=>$(l).checked=selected.includes(l));cart=[];$('filter').value='all';invalidate();runTests();}
 function calculate(){const p=$('calc-pass').value,f=$('calc-fail').value,a=Number(p),b=Number(f),out=$('calc-result');if(p===''||f===''||!Number.isSafeInteger(a)||!Number.isSafeInteger(b)||a<0||b<0||!Number.isSafeInteger(a+b)){out.textContent='Ingresa cantidades enteras, válidas y no negativas.';return;}const n=a+b;out.textContent=n===0?'Sin pruebas ejecutadas: las tasas no se pueden calcular.':`${n} ejecutadas · Pass: (${a} / ${n}) × 100 = ${(a/n*100).toLocaleString('es-PE',{maximumFractionDigits:2})}% · Fail: (${b} / ${n}) × 100 = ${(b/n*100).toLocaleString('es-PE',{maximumFractionDigits:2})}%`;}
 levels.forEach(l=>$(l).addEventListener('change',invalidate));
@@ -156,7 +202,7 @@ $('update-automation').addEventListener('click',updateAutomation);
 $('planned-cases').addEventListener('input',updateAutomation);
 $('critical-case').addEventListener('click',()=>setPreset(['critical']));
 $('all-case').addEventListener('click',()=>setPreset(levels));
-$('reset').addEventListener('click',()=>{levels.forEach(l=>$(l).checked=false);cart=[];tested=false;dynamicPurchaseStats={attempts:0,errors:0,totalDurationMs:0,successfulAt:[]};$('filter').value='all';$('report').hidden=true;$('test-status').textContent='Ejecuta las pruebas para evaluar la configuración actual.';$('calc-pass').value=85;$('calc-fail').value=15;$('leakage-pre').value=40;$('leakage-prod').value=10;$('flaky-total').value=10;$('flaky-unstable').value=2;$('planned-cases').value=25;calculate();updateLeakage();updateFlaky();updateAutomation();updateDynamicMetrics();renderShop();message('Agrega un producto para probar una compra.');});
+$('reset').addEventListener('click',()=>{levels.forEach(l=>$(l).checked=false);cart=[];tested=false;dynamicPurchaseStats={attempts:0,errors:0,totalDurationMs:0,successfulAt:[]};$('filter').value='all';$('report').hidden=true;$('test-status').textContent='Ejecuta las pruebas para evaluar la configuración actual.';$('calc-pass').value=85;$('calc-fail').value=15;$('leakage-pre').value=40;$('leakage-prod').value=10;$('flaky-total').value=10;$('flaky-unstable').value=2;$('planned-cases').value=25;calculate();updateLeakage();updateFlaky();updateAutomation();updateDynamicMetrics();updateCoverage();updateDefectRate();renderShop();message('Agrega un producto para probar una compra.');});
 ['calc-pass','calc-fail'].forEach(id=>$(id).addEventListener('input',calculate));
-renderShop();calculate();updateLeakage();updateFlaky();updateAutomation();updateDynamicMetrics();
+renderShop();calculate();updateLeakage();updateFlaky();updateAutomation();updateDynamicMetrics();updateCoverage();updateDefectRate();
 setInterval(updateDynamicMetrics,1000);
