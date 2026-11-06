@@ -9,11 +9,41 @@ const catalog = [
 ];
 let cart = [];
 let tested = false;
+let dynamicPurchaseStats = { attempts: 0, errors: 0, totalDurationMs: 0, successfulAt: [] };
 function state(){ return Object.fromEntries(levels.map(level => [level,$(level).checked])); }
 function visibleProducts(category, bugs){return catalog.filter(p => category === 'all' || p.category === category || (bugs.medium && category === 'audio' && p.id === 2));}
 function totalFor(items,bugs){return items.reduce((sum,p)=>sum+p.price,0)+(items.length && bugs.high ? 20 : 0);}
 function checkoutResult(items,bugs){return !items.length ? 'empty' : bugs.critical ? 'blocked' : 'success';}
 function buttonColor(bugs){return bugs.low ? '#8651be' : '#17634e';}
+function updateDynamicMetrics(){
+ const result=DynamicMetrics.summarize(dynamicPurchaseStats.attempts,dynamicPurchaseStats.errors,dynamicPurchaseStats.totalDurationMs);
+ const fmt=value=>new Intl.NumberFormat('es-PE',{maximumFractionDigits:2}).format(value);
+ const now=performance.now();
+ dynamicPurchaseStats.successfulAt=dynamicPurchaseStats.successfulAt.filter(time=>now-time<60000);
+ const throughput=DynamicMetrics.calculateThroughput(dynamicPurchaseStats.successfulAt.length,60000);
+ $('dynamic-throughput').textContent=throughput.valid?fmt(throughput.transactionsPerMinute):'—';
+ if(!result.valid||result.attempts===0){$('dynamic-response').textContent='—';$('dynamic-response-detail').textContent='Sin compras registradas';$('dynamic-error-rate').textContent='—';$('dynamic-error-detail').textContent='0 errores de 0 intentos';return;}
+ $('dynamic-response').textContent=fmt(result.averageResponseMs)+' ms';
+ $('dynamic-response-detail').textContent=`Promedio de ${result.attempts} intentos`;
+ $('dynamic-error-rate').textContent=fmt(result.errorRate)+' %';
+ $('dynamic-error-detail').textContent=`${result.errors} errores de ${result.attempts} intentos`;
+}
+function finalizePurchase(){
+ if(!cart.length){message('Agrega un producto antes de comprar.');return;}
+ const items=[...cart], bugs=state();
+ const expectedTotal=items.reduce((sum,product)=>sum+product.price,0);
+ const started=performance.now();
+ const result=checkoutResult(items,bugs);
+ const chargedTotal=totalFor(items,bugs);
+ const hasError=result==='blocked'||chargedTotal!==expectedTotal;
+ if(result==='blocked')message('Error crítico: no se puede finalizar la compra.','error');
+ else if(hasError)message(`Error de precio: se cobraría S/ ${chargedTotal.toFixed(2)}; se esperaba S/ ${expectedTotal.toFixed(2)}.`,'error');
+ else{message('Compra simulada completada por S/ '+chargedTotal.toFixed(2)+'.','success');cart=[];renderShop();dynamicPurchaseStats.successfulAt.push(performance.now());}
+ dynamicPurchaseStats.attempts++;
+ if(hasError)dynamicPurchaseStats.errors++;
+ dynamicPurchaseStats.totalDurationMs+=performance.now()-started;
+ updateDynamicMetrics();
+}
 function updateLeakage(){
  const before=$('leakage-pre').value, after=$('leakage-prod').value;
  const result=DefectLeakage.calculate(before===''?null:Number(before),after===''?null:Number(after));
@@ -115,7 +145,7 @@ function calculate(){const p=$('calc-pass').value,f=$('calc-fail').value,a=Numbe
 levels.forEach(l=>$(l).addEventListener('change',invalidate));
 $('filter').addEventListener('change',renderShop);
 $('products').addEventListener('click',event=>{const button=event.target.closest('[data-add]');if(!button)return;const product=catalog.find(p=>p.id===Number(button.dataset.add));cart.push(product);renderShop();message(product.name+' agregado al carrito.');});
-$('buy').addEventListener('click',()=>{const result=checkoutResult(cart,state());if(result==='empty')message('Agrega un producto antes de comprar.');else if(result==='blocked')message('Error crítico: no se puede finalizar la compra.','error');else{message('Compra simulada completada por S/ '+totalFor(cart,state()).toFixed(2)+'.','success');cart=[];renderShop();}});
+ $('buy').addEventListener('click',finalizePurchase);
 $('run').addEventListener('click',runTests);
 $('leakage-pre').addEventListener('input',updateLeakage);
 $('leakage-prod').addEventListener('input',updateLeakage);
@@ -126,6 +156,7 @@ $('update-automation').addEventListener('click',updateAutomation);
 $('planned-cases').addEventListener('input',updateAutomation);
 $('critical-case').addEventListener('click',()=>setPreset(['critical']));
 $('all-case').addEventListener('click',()=>setPreset(levels));
-$('reset').addEventListener('click',()=>{levels.forEach(l=>$(l).checked=false);cart=[];tested=false;$('filter').value='all';$('report').hidden=true;$('test-status').textContent='Ejecuta las pruebas para evaluar la configuración actual.';$('calc-pass').value=85;$('calc-fail').value=15;$('leakage-pre').value=40;$('leakage-prod').value=10;$('flaky-total').value=10;$('flaky-unstable').value=2;$('planned-cases').value=25;calculate();updateLeakage();updateFlaky();updateAutomation();renderShop();message('Agrega un producto para probar una compra.');});
+$('reset').addEventListener('click',()=>{levels.forEach(l=>$(l).checked=false);cart=[];tested=false;dynamicPurchaseStats={attempts:0,errors:0,totalDurationMs:0,successfulAt:[]};$('filter').value='all';$('report').hidden=true;$('test-status').textContent='Ejecuta las pruebas para evaluar la configuración actual.';$('calc-pass').value=85;$('calc-fail').value=15;$('leakage-pre').value=40;$('leakage-prod').value=10;$('flaky-total').value=10;$('flaky-unstable').value=2;$('planned-cases').value=25;calculate();updateLeakage();updateFlaky();updateAutomation();updateDynamicMetrics();renderShop();message('Agrega un producto para probar una compra.');});
 ['calc-pass','calc-fail'].forEach(id=>$(id).addEventListener('input',calculate));
-renderShop();calculate();updateLeakage();updateFlaky();updateAutomation();
+renderShop();calculate();updateLeakage();updateFlaky();updateAutomation();updateDynamicMetrics();
+setInterval(updateDynamicMetrics,1000);
